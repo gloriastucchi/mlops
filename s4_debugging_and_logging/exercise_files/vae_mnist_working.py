@@ -1,7 +1,3 @@
-"""Adapted from https://github.com/Jackson-Kang/Pytorch-VAE-tutorial/blob/master/01_Variational_AutoEncoder.ipynb.
-
-A simple implementation of Gaussian MLP Encoder and Decoder trained on MNIST
-"""
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
@@ -9,6 +5,12 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 from torchvision.utils import save_image
+from rich.logging import RichHandler
+import logging
+from logging import config
+import wandb
+import os
+
 
 # Model Hyperparameters
 dataset_path = "datasets"
@@ -21,7 +23,6 @@ latent_dim = 20
 lr = 1e-3
 epochs = 5
 
-
 # Data loading
 mnist_transform = transforms.Compose([transforms.ToTensor()])
 
@@ -31,7 +32,69 @@ test_dataset = MNIST(dataset_path, transform=mnist_transform, train=False, downl
 train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
 
+# Configure rich handler separately
+rich_handler = RichHandler(markup=True)
 
+# Initialize wandb
+wandb.init(project="vae_mnist", name="experiment_name")  # Replace with your project and experiment names
+
+# Configure logging
+LOGS_DIR = 'C:\\Users\\stucc\\OneDrive\\Desktop\\mlops\\dtu_mlops\\s4_debugging_and_logging\\exercise_files\\LOGS_DIR'
+
+logging_config = {
+    "version": 1,
+    "formatters": {
+        "minimal": {"format": "%(message)s"},
+        "detailed": {
+            "format": "%(levelname)s %(asctime)s [%(name)s:%(filename)s:%(funcName)s:%(lineno)d]\n%(message)s\n"
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": None,
+            "formatter": "minimal",
+            "level": logging.WARNING,
+        },
+        "info": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": os.path.join(LOGS_DIR, "info.log"),
+            "maxBytes": 10485760,  # 1 MB
+            "backupCount": 10,
+            "formatter": "detailed",
+            "level": logging.INFO,
+        },
+        "error": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": os.path.join(LOGS_DIR, "error.log"),
+            "maxBytes": 10485760,  # 1 MB
+            "backupCount": 10,
+            "formatter": "detailed",
+            "level": logging.ERROR,
+        },
+    },
+    "root": {
+        "handlers": ["console", "info", "error"],
+        "level": logging.INFO,
+        "propagate": True,
+    },
+}
+
+# Configure logging using the logging config submodule
+config.dictConfig(logging_config)
+
+# Set rich handler for the console
+logger = logging.getLogger(__name__)
+logger.root.handlers[0] = rich_handler
+
+# Logging levels (from lowest to highest priority)
+logger.debug("Used for debugging your code.")
+logger.info("Informative messages from your code.")
+logger.warning("Everything works but there is something to be aware of.")
+logger.error("There's been a mistake with the process.")
+logger.critical("There is something terribly wrong, and the process may terminate.")
+
+# Model definition
 class Encoder(nn.Module):
     """Gaussian MLP Encoder."""
 
@@ -103,19 +166,9 @@ decoder = Decoder(latent_dim=latent_dim, hidden_dim=hidden_dim, output_dim=x_dim
 
 model = Model(encoder=encoder, decoder=decoder).to(DEVICE)
 
-
 BCE_loss = nn.BCELoss()
 
-
-def loss_function(x, x_hat, mean, log_var):
-    """Reconstruction + KL divergence losses summed over all elements and batch."""
-    reproduction_loss = nn.functional.binary_cross_entropy(x_hat, x, reduction="sum")
-    kld = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
-    return reproduction_loss + kld
-
-
 optimizer = Adam(model.parameters(), lr=lr)
-
 
 print("Start training VAE...")
 model.train()
@@ -130,12 +183,22 @@ for epoch in range(epochs):
         optimizer.zero_grad()
 
         x_hat, mean, log_var = model(x)
-        loss = loss_function(x, x_hat, mean, log_var)
+        loss = nn.CrossEntropyLoss(x, x_hat, mean, log_var)
 
         overall_loss += loss.item()
 
         loss.backward()
         optimizer.step()
+
+        # Log accuracy to wandb
+        # Log accuracy, example image, and histogram to wandb
+        wandb.log({
+            "accuracy": overall_loss / ((batch_idx + 1) * batch_size),
+            "epoch": epoch,
+            "example_image": wandb.Image(x.view(batch_size, 1, 28, 28)),
+            "example_histogram": wandb.Histogram(x.flatten().cpu().numpy()),
+        })
+
     print(
         "\tEpoch",
         epoch + 1,
